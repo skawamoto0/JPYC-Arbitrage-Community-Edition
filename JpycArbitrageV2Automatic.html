@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>JPYC Arbitrage Community Edition V2</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.boxinline{
+	display: inline-block;
+	padding: 0.5em;
+	margin: 0.25em;
+	border-radius: 0.5em;
+}
+.boxoneline{
+	display: block;
+	min-height: 1em;
+	padding: 0.5em;
+	margin: 0.25em;
+	border-radius: 0.5em;
+}
+.textmain{
+	color: #000000;
+	background-color: #ffffff;
+	text-align: left;
+	font-size: 1em;
+}
+.texttitle1{
+	color: #000000;
+	background-color: #40a0ff;
+	text-align: center;
+	font-size: 1.5em;
+	font-weight: bold;
+}
+.texttitle2{
+	color: #000000;
+	background-color: #c0e0ff;
+	text-align: center;
+	font-size: 1.5em;
+}
+.textouter{
+	color: #000000;
+	background-color: #ffffff;
+	font-size: 1em;
+}
+.textfloat{
+	color: #000000;
+	background-color: #e0ffff;
+	text-align: left;
+	font-size: 1em;
+}
+.textpopup{
+	color: #000000;
+	background-color: #ffffe0;
+	text-align: left;
+	font-size: 1rem;
+}
+.textinput{
+	color: #000000;
+	background-color: #ffffff;
+	font-size: 0.75em;
+}
+.textbutton1{
+	color: #000000;
+	background-color: #80ff80;
+	font-size: 0.75em;
+}
+.textbutton2{
+	color: #000000;
+	background-color: #ff8080;
+	font-size: 0.75em;
+}
+.textoutput{
+	color: #000000;
+	background-color: #e0e0e0;
+	font-size: 1em;
+}
+.imageinline{
+	height: 1em;
+	margin: 0em;
+	border: 0em;
+	vertical-align: middle;
+}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/web3@latest/dist/web3.min.js"></script>
+<script type="text/javascript">
+function JpycArbitrage(){
+	let t = this;
+	t.web3 = new Web3("https://polygon-rpc.com/");
+	t.ContractAddress = "";
+	t.PrivateKey = "";
+	t.Amount = t.web3.utils.toBN(0);
+	t.Threshold = t.web3.utils.toBN(0);
+	t.BlocknativeApiKey = "";
+	t.ThresholdExchanges = t.web3.utils.toBN(0);
+	t.ThresholdAggregators = t.web3.utils.toBN(0);
+	t.Paused = false;
+	t.LastCheck = new Array(3);
+	t.ws = null;
+	t.Configuration = null;
+	t.ConfigurationCount = 0;
+	t.Timer = null;
+	t.IdleTimer = null;
+	t.StringToBN = function(x, Base, Decimals){
+		let t = this;
+		let a = x.toString();
+		if(a.indexOf(".") < 0){
+			return t.web3.utils.toBN(a, Base).mul(t.web3.utils.toBN(Base).pow(t.web3.utils.toBN(Decimals)));
+		}
+		let b = t.web3.utils.toBN(a.slice(0, a.indexOf(".")), Base).mul(t.web3.utils.toBN(Base).pow(t.web3.utils.toBN(Decimals)));
+		let c = a.slice(a.indexOf(".") + 1, a.indexOf(".") + 1 + Decimals);
+		let d = t.web3.utils.toBN(c, Base).mul(t.web3.utils.toBN(Base).pow(t.web3.utils.toBN(Decimals - c.length)));
+		return a.charAt(0) == "-" ? b.sub(d) : b.add(d);
+	}
+	t.BNToString = function(x, Base, Decimals){
+		let t = this;
+		let a = t.web3.utils.toBN(x);
+		let b = a.divmod(t.web3.utils.toBN(Base).pow(t.web3.utils.toBN(Decimals)));
+		return (a.isNeg() ? "-" : "") + b.div.abs().toString(Base) + (Decimals != 0 ? "." + b.mod.abs().toString(Base, Decimals) : "");
+	}
+	t.GetGasPrice = function(){
+		return new Promise(function(a, b){
+			let x = new XMLHttpRequest();
+			x.onload = function(){
+				if(x.status == 200){
+					a(Math.min(parseInt(JSON.parse(x.response).fast) + 1, 300) + "000000000");
+				}else{
+					b(x.status);
+				}
+			};
+			x.onerror = function(){
+				b(null);
+			}
+			x.open("GET", "https://gasstation-mainnet.matic.network/");
+			x.send();
+		});
+	};
+	t.GetBalance = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			t.web3.eth.getBalance(t.web3.eth.accounts.privateKeyToAccount(t.PrivateKey).address).then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.BalanceOfJpyc = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "",
+							type : "address"
+						}
+					],
+					name : "balanceOf",
+					outputs : [
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB");
+			c.methods.balanceOf(t.web3.eth.accounts.privateKeyToAccount(t.PrivateKey).address).call().then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.AllowanceJpyc = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "",
+							type : "address"
+						},
+						{
+							name : "",
+							type : "address"
+						}
+					],
+					name : "allowance",
+					outputs : [
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB");
+			c.methods.allowance(t.web3.eth.accounts.privateKeyToAccount(t.PrivateKey).address, t.ContractAddress).call().then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.ApproveJpyc = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "",
+							type : "address"
+						},
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					name : "approve",
+					outputs : [
+						{
+							name : "",
+							type : "bool"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB");
+			t.GetGasPrice().then(function(x){
+				t.web3.eth.accounts.signTransaction({to : "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB", data : c.methods.approve(t.ContractAddress, t.web3.utils.toBN("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")).encodeABI(), gasPrice : x, gas : 100000}, t.PrivateKey).then(function(x){
+					t.web3.eth.sendSignedTransaction(x.rawTransaction).then(function(x){
+						a(x);
+					}, function(){
+						b();
+					});
+				});
+			});
+		});
+	};
+	t.CheckArbitrage = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "amount",
+							type : "uint256"
+						}
+					],
+					name : "checkArbitrage",
+					outputs : [
+						{
+							name : "",
+							type : "uint256"
+						},
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, t.ContractAddress);
+			c.methods.checkArbitrage(t.Amount).call().then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.Arbitrage = function(Route){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "amount",
+							type : "uint256"
+						},
+						{
+							name : "minimum",
+							type : "uint256"
+						},
+						{
+							name : "route",
+							type : "uint256"
+						},
+						{
+							name : "loop",
+							type : "uint256"
+						}
+					],
+					name : "arbitrage",
+					outputs : [],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, t.ContractAddress);
+			t.GetGasPrice().then(function(x){
+				t.web3.eth.accounts.signTransaction({to : t.ContractAddress, data : c.methods.arbitrage(t.Amount, t.web3.utils.toBN(t.Amount).add(t.web3.utils.toBN(1)), Route, 5).encodeABI(), gasPrice : x, gas : 3000000}, t.PrivateKey).then(function(x){
+					t.web3.eth.sendSignedTransaction(x.rawTransaction).then(function(x){
+						a(x);
+					}, function(){
+						b();
+					});
+				});
+			});
+		});
+	};
+	t.ArbitrageFast = function(Route, GasPrice, MaxFeePerGas, MaxPriorityFeePerGas){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [
+						{
+							name : "amount",
+							type : "uint256"
+						},
+						{
+							name : "minimum",
+							type : "uint256"
+						},
+						{
+							name : "route",
+							type : "uint256"
+						},
+						{
+							name : "loop",
+							type : "uint256"
+						}
+					],
+					name : "arbitrage",
+					outputs : [],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, t.ContractAddress);
+			t.web3.eth.accounts.signTransaction({to : t.ContractAddress, data : c.methods.arbitrage(t.Amount, t.web3.utils.toBN(t.Amount).add(t.web3.utils.toBN(1)), Route, 5).encodeABI(), gasPrice : GasPrice, gas : 3000000, maxFeePerGas : MaxFeePerGas, maxPriorityFeePerGas : MaxPriorityFeePerGas}, t.PrivateKey).then(function(x){
+				t.web3.eth.sendSignedTransaction(x.rawTransaction).then(function(x){
+					a(x);
+				}, function(){
+					b();
+				});
+			});
+		});
+	};
+	t.GetReserveCommunity = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [],
+					name : "getReserve",
+					outputs : [
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, t.ContractAddress);
+			c.methods.getReserve().call().then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.GetBalanceCommunity = function(){
+		let t = this;
+		return new Promise(function(a, b){
+			let abi = [
+				{
+					inputs : [],
+					name : "getBalance",
+					outputs : [
+						{
+							name : "",
+							type : "uint256"
+						}
+					],
+					type : "function"
+				}
+			];
+			let c = new t.web3.eth.Contract(abi, t.ContractAddress);
+			c.methods.getBalance().call().then(function(x){
+				a(x);
+			}, function(){
+				b();
+			});
+		});
+	};
+	t.EncryptPrivateKey = function(Password, IV, PrivateKey){
+		let t = this;
+		return new Promise(function(a, b){
+			crypto.subtle.importKey("jwk", {kty : "oct", k : Password + "0000000000000000000000000000000000000000000".slice(Password.length), alg : "A256GCM", ext : true}, {name : "AES-GCM"}, false, ["encrypt", "decrypt"]).then(function(x){
+				crypto.subtle.encrypt({name : "AES-GCM", iv : IV}, x, new TextEncoder().encode(PrivateKey)).then(function(x){
+					a(new Uint8Array(x));
+				});
+			});
+		});
+	};
+	t.DecryptPrivateKey = function(Password, IV, PrivateKey){
+		let t = this;
+		return new Promise(function(a, b){
+			crypto.subtle.importKey("jwk", {kty : "oct", k : Password + "0000000000000000000000000000000000000000000".slice(Password.length), alg : "A256GCM", ext : true}, {name : "AES-GCM"}, false, ["encrypt", "decrypt"]).then(function(x){
+				crypto.subtle.decrypt({name : "AES-GCM", iv : IV}, x, PrivateKey).then(function(x){
+					a(new TextDecoder().decode(x));
+				});
+			});
+		});
+	};
+	t.Approve = function(){
+		let t = this;
+		t.AllowanceJpyc().then(function(x){
+			if(t.web3.utils.toBN(x).lt(t.web3.utils.toBN("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"))){
+				t.Log("Approve the contract");
+				t.ApproveJpyc().then(function(x){
+					t.Log("Transaction hash : " + x.transactionHash);
+				});
+			}else{
+				t.Log("The contract is already approved");
+			}
+		});
+	};
+	t.Update = function(){
+		let t = this;
+		localStorage.setItem("JpycArbitrage.private", document.getElementById("private").value);
+		localStorage.setItem("JpycArbitrage.iv", document.getElementById("iv").value);
+		localStorage.setItem("JpycArbitrage.amount", document.getElementById("amount").value);
+		localStorage.setItem("JpycArbitrage.threshold", document.getElementById("threshold").value);
+		localStorage.setItem("JpycArbitrage.blocknative", document.getElementById("blocknative").value);
+		localStorage.setItem("JpycArbitrage.thresholdexchanges", document.getElementById("thresholdexchanges").value);
+		localStorage.setItem("JpycArbitrage.thresholdaggregators", document.getElementById("thresholdaggregators").value);
+		t.ContractAddress = document.getElementById("contract").value;
+		t.Amount = t.StringToBN(document.getElementById("amount").value, 10, 18);
+		t.Threshold = t.StringToBN(document.getElementById("threshold").value, 10, 18);
+		t.BlocknativeApiKey = document.getElementById("blocknative").value;
+		t.ThresholdExchanges = t.StringToBN(document.getElementById("thresholdexchanges").value, 10, 18);
+		t.ThresholdAggregators = t.StringToBN(document.getElementById("thresholdaggregators").value, 10, 18);
+		document.getElementById("auth").innerText = "Password is incorrect";
+		t.DecryptPrivateKey(document.getElementById("password").value, Function("return new Uint8Array(" + document.getElementById("iv").value + ");")(), Function("return new Uint8Array(" + document.getElementById("private").value + ");")()).then(function(x){
+			document.getElementById("auth").innerText = "Password is authenticated";
+			if(x != t.PrivateKey){
+				t.PrivateKey = x;
+				t.UpdateBalance();
+			}
+		});
+	};
+	t.UpdateBalance = function(){
+		let t = this;
+		t.GetBalance().then(function(x){
+			t.BalanceOfJpyc().then(function(y){
+				document.getElementById("balance").innerText = "Balance " + t.BNToString(x, 10, 18).slice(0, -14) + " MATIC / " + t.BNToString(y, 10, 18).slice(0, -16) + " JPYC";
+				t.Paused = false;
+			});
+		});
+	};
+	t.UpdatePrivateKey = function(){
+		let t = this;
+		t.EncryptPrivateKey(document.getElementById("password").value, Function("return new Uint8Array(" + document.getElementById("iv").value + ");")(), document.getElementById("newprivate").value).then(function(x){
+			document.getElementById("private").value = "[" + x.toString() + "]";
+			document.getElementById("newprivate").value = "";
+			t.Update();
+		});
+	}
+	t.Log = function(x){
+		document.getElementById("log").innerText += new Date().toISOString() + " " + x + "\n";
+	};
+	t.SendArbitrage = function(Route, GasPrice, MaxFeePerGas, MaxPriorityFeePerGas){
+		let t = this;
+		((GasPrice || MaxFeePerGas || MaxPriorityFeePerGas) ? t.ArbitrageFast(Route, GasPrice, MaxFeePerGas, MaxPriorityFeePerGas) : t.Arbitrage(Route)).then(function(x){
+			t.Log("Transaction hash : " + x.transactionHash);
+			t.UpdateBalance();
+		});
+	};
+	t.SubscribeTransaction = function(){
+		let t = this;
+		if(!t.BlocknativeApiKey){
+			setTimeout(function(){
+				t.SubscribeTransaction();
+			}, 10000);
+			return;
+		}
+		let h = {
+			timeStamp : "",
+			dappId : t.BlocknativeApiKey,
+			version : "1",
+			blockchain : {
+				system : "ethereum",
+				network : "matic-main"
+			}
+		};
+		t.ws = new WebSocket("wss://api.blocknative.com/v0");
+		t.ws.addEventListener("open", function(e){
+			let x = new XMLHttpRequest();
+			x.onload = function(){
+				if(x.status == 200){
+					t.Configuration = JSON.parse(x.response).filter(function(i){
+						return (i.id != "global");
+					});
+					t.ConfigurationCount = 0;
+					h.timeStamp = new Date().toISOString();
+					t.ws.send(JSON.stringify({...h, categoryCode : "initialize", eventCode : "checkDappId"}));
+				}else{
+					x.onerror();
+				}
+			};
+			x.onerror = function(){
+				t.ws.close();
+			};
+			x.open("GET", "configurationV2.json");
+			x.send();
+		});
+		t.ws.addEventListener("message", function(e){
+			try{
+				let d = JSON.parse(e.data);
+				if(d.status != "ok"){
+					t.ws.close();
+					return;
+				}
+				if(t.Configuration){
+					if(t.ConfigurationCount < t.Configuration.length * 2){
+						let i = t.Configuration[Math.floor(t.ConfigurationCount / 2)];
+						h.timeStamp = new Date().toISOString();
+						if(t.ConfigurationCount % 2 == 0){
+							t.ws.send(JSON.stringify({...h, categoryCode : "configs", eventCode : "put", config : {scope : i.id, filters : i.filters, abi : i.abi, watchAddress : true}}));
+						}else if(t.ConfigurationCount % 2 == 1){
+							t.ws.send(JSON.stringify({...h, categoryCode : "accountAddress", eventCode : "watch", account : {address : i.id}}));
+						}
+						t.ConfigurationCount++;
+					}else if(t.ConfigurationCount == t.Configuration.length * 2){
+						t.Log("Subscription of pending transactions started");
+						t.ConfigurationCount++;
+					}
+				}
+				if(d.event && d.event.transaction){
+					d.event.transaction.contractCall = d.event.contractCall
+					t.ParseTransactionData(d.event.transaction);
+				}
+			}catch(e){
+			}
+		});
+		t.ws.addEventListener("error", function(e){
+			t.ws.close();
+		});
+		t.ws.addEventListener("close", function(e){
+			setTimeout(function(){
+				t.SubscribeTransaction();
+			}, 1000);
+		});
+	};
+	t.ParseTransactionData = function(data){
+		let t = this;
+		let AddressQuickSwapRouter = "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff";
+		let AddressUniswapV3Router = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
+		let Address1inchRouter = "0x1111111254fb6c44bAC0beD2854e76F90643097d";
+		try{
+			if(data.contractCall.contractAddress == AddressQuickSwapRouter){
+				if(data.contractCall.methodName == "swapExactTokensForTokens"){
+					if(data.contractCall.params.path[0] == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.amountIn).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " QuickSwap/swapExactTokensForTokens");
+								t.SendArbitrage(0x10, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+					if(data.contractCall.params.path[data.contractCall.params.path.length - 1] == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.amountOutMin).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " QuickSwap/swapExactTokensForTokens");
+								t.SendArbitrage(0x11, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+				}
+			}
+			if(data.contractCall.contractAddress == AddressUniswapV3Router){
+				if(data.contractCall.methodName == "exactInput"){
+					if(data.contractCall.params.params.path.startsWith("431d5dff03120afa4bdf332c61a6e1766ef37bdb", 2)){
+						if(t.web3.utils.toBN(data.contractCall.params.params.amountIn).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " UniswapV3/exactInputSingle");
+								t.SendArbitrage(0x10, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+					if(data.contractCall.params.params.path.endsWith("431d5dff03120afa4bdf332c61a6e1766ef37bdb")){
+						if(t.web3.utils.toBN(data.contractCall.params.params.amountOutMinimum).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " UniswapV3/exactInputSingle");
+								t.SendArbitrage(0x11, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+				}
+				if(data.contractCall.methodName == "exactInputSingle"){
+					if(data.contractCall.params.params.tokenIn == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.params.amountIn).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " UniswapV3/exactInputSingle");
+								t.SendArbitrage(0x10, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+					if(data.contractCall.params.params.tokenOut == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.params.amountOutMinimum).gte(t.ThresholdExchanges)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " UniswapV3/exactInputSingle");
+								t.SendArbitrage(0x11, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+				}
+			}
+			if(data.contractCall.contractAddress == Address1inchRouter){
+				if(data.contractCall.methodName == "swap"){
+					if(data.contractCall.params.desc.srcToken == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.desc.amount).gte(t.ThresholdAggregators)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " 1inch/swap");
+								t.SendArbitrage(0x10, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+					if(data.contractCall.params.desc.dstToken == "0x431D5dfF03120AFA4bDf332c61A6e1766eF37BDB"){
+						if(t.web3.utils.toBN(data.contractCall.params.desc.minReturnAmount).gte(t.ThresholdAggregators)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " 1inch/swap");
+								t.SendArbitrage(0x11, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+				}
+				if(data.contractCall.methodName == "uniswapV3Swap"){
+					if(data.contractCall.params.pools[0] == "230744729336494871100826755936387997592900079662"){
+						if(t.web3.utils.toBN(data.contractCall.params.amount).gte(t.ThresholdAggregators)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " 1inch/uniswapV3Swap");
+								t.SendArbitrage(0x10, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+					if(data.contractCall.params.pools[data.contractCall.params.pools.length - 1] == "230744729336494871100826755936387997592900079662"){
+						if(t.web3.utils.toBN(data.contractCall.params.minReturn).gte(t.ThresholdAggregators)){
+							if(data.status == "pending"){
+								t.Log("Back running after the transaction : " + data.hash + " 1inch/uniswapV3Swap");
+								t.SendArbitrage(0x11, (data.maxFeePerGas || data.maxPriorityFeePerGas) ? undefined : Math.min(parseInt(data.gasPrice), 300000000000).toString(), data.maxFeePerGas ? Math.min(parseInt(data.maxFeePerGas), 300000000000).toString() : undefined, data.maxPriorityFeePerGas ? Math.min(parseInt(data.maxPriorityFeePerGas), 300000000000).toString() : undefined);
+							}
+						}
+					}
+				}
+			}
+		}catch(e){
+		}
+	};
+	t.UpdateCommunity = function(){
+		let t = this;
+		t.GetReserveCommunity().then(function(x){
+			document.getElementById("reservecommunity").innerText = "Reserve for distribution " + t.BNToString(x, 10, 18).slice(0, -16) + " JPYC";
+			t.GetBalanceCommunity().then(function(y){
+				document.getElementById("balancecommunity").innerText = "Balance for trading " + t.BNToString(t.web3.utils.toBN(y).sub(t.web3.utils.toBN(x)), 10, 18).slice(0, -16) + " JPYC";
+			});
+		});
+	};
+	t.Loop = function(){
+		let t = this;
+		try{
+			t.Update();
+			let time = Date.now();
+			t.CheckArbitrage().then(function(x){
+				if(Date.now() - time <= 2000){
+					if(t.Paused){
+						t.UpdateBalance();
+					}else{
+						if(t.LastCheck.every(function(i){
+							return !t.web3.utils.toBN(x[0]).eq(i);
+						})){
+							t.LastCheck.unshift(t.web3.utils.toBN(x[0]));
+							t.LastCheck.pop();
+							document.getElementById("quote").innerText = "Profit will be " + t.BNToString(t.web3.utils.toBN(x[0]).sub(t.Amount), 10, 18) + " JPYC with the route " + x[1];
+							if(t.web3.utils.toBN(t.Threshold).gt(t.web3.utils.toBN(0)) && t.web3.utils.toBN(x[0]).gte(t.Amount) && t.web3.utils.toBN(x[0]).sub(t.Amount).gte(t.Threshold)){
+								t.Log("Profit will be " + t.BNToString(t.web3.utils.toBN(x[0]).sub(t.Amount), 10, 18) + " JPYC with the route " + x[1]);
+								t.SendArbitrage(x[1], undefined, undefined, undefined);
+							}
+						}
+					}
+				}
+			});
+		}catch(e){
+		}
+		t.Timer = setTimeout(function(){
+			t.Loop();
+		}, 30000);
+	};
+	t.IdleLoop = function(){
+		let t = this;
+		try{
+			t.UpdateCommunity();
+		}catch(e){
+		}
+		t.IdleTimer = setTimeout(function(){
+			t.IdleLoop();
+		}, 60000);
+	};
+	t.StartLoop = function(){
+		let t = this;
+		setTimeout(function(){
+			try{
+				document.getElementById("private").value = localStorage.getItem("JpycArbitrage.private") || "";
+				document.getElementById("iv").value = localStorage.getItem("JpycArbitrage.iv") || "[0,0,0,0,0,0,0,0,0,0,0,0]";
+				document.getElementById("amount").value = localStorage.getItem("JpycArbitrage.amount") || "10000";
+				document.getElementById("threshold").value = localStorage.getItem("JpycArbitrage.threshold") || "100";
+				document.getElementById("blocknative").value = localStorage.getItem("JpycArbitrage.blocknative") || "";
+				document.getElementById("thresholdexchanges").value = localStorage.getItem("JpycArbitrage.thresholdexchanges") || "200000";
+				document.getElementById("thresholdaggregators").value = localStorage.getItem("JpycArbitrage.thresholdaggregators") || "100000";
+				t.Update();
+				t.SubscribeTransaction();
+			}catch(e){
+			}
+			setTimeout(function(){
+				t.Loop();
+				t.IdleLoop();
+			}, 100);
+		}, 100);
+	};
+	t.StopLoop = function(){
+		let t = this;
+		clearTimeout(t.Timer);
+		clearTimeout(t.IdleTimer);
+	};
+}
+function InitializePopup(Name){
+	Array.prototype.forEach.call(document.getElementsByName(Name), function(e){
+		new (function(x){
+			let t = this;
+			t.Popup = x;
+			t.Popup.style.position = "fixed";
+			t.Popup.style.zIndex = "1";
+			t.Popup.style.display = "none";
+			t.Popup.parentNode.addEventListener("mousemove", function(e){
+				t.Popup.style.left = (e.clientX + 1) + "px";
+				t.Popup.style.top = (e.clientY + 1) + "px";
+			});
+			t.Popup.parentNode.addEventListener("mouseenter", function(e){
+				t.Popup.style.display = "block";
+			});
+			t.Popup.parentNode.addEventListener("mouseleave", function(e){
+				t.Popup.style.display = "none";
+			});
+		})(e);
+	});
+}
+function InitializeTokenImage(Name){
+	let ImageUrl = {
+		"0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" : "https://assets.coingecko.com/coins/images/17277/small/WoZ8rruL_400x400.png",
+		"0x2791bca1f2de4661ed88a30c99a7a9449aa84174" : "https://assets.coingecko.com/coins/images/6319/small/USD_Coin_icon.png",
+		"0x8343091f2499fd4b6174a46d067a920a3b851ff9" : "https://assets.coingecko.com/coins/images/24327/small/jJPY.png"
+	};
+	Array.prototype.forEach.call(document.getElementsByName(Name), function(e){
+		e.src = ImageUrl[e.id.toLowerCase()];
+	});
+}
+var JA = new JpycArbitrage();
+</script>
+</head>
+<body onload="JA.StartLoop();InitializePopup('popup');InitializeTokenImage('token');">
+<div class="boxoneline textouter" style="margin: auto; width: 96em; text-align: center;">
+<div class="boxoneline texttitle1"><img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline">➡<img name="token" id="0x2791bca1f2de4661ed88a30c99a7a9449aa84174" class="imageinline">➡<img name="token" id="0x8343091f2499fd4b6174a46d067a920a3b851ff9" class="imageinline">➡<img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> JPYC Arbitrage Community Edition V2 <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline">➡<img name="token" id="0x8343091f2499fd4b6174a46d067a920a3b851ff9" class="imageinline">➡<img name="token" id="0x2791bca1f2de4661ed88a30c99a7a9449aa84174" class="imageinline">➡<img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"></div>
+<div class="boxinline textfloat" style="min-width: 22em; vertical-align: top;">
+<div class="boxoneline texttitle2">User authentication</div>
+<div class="boxoneline">
+<span>Encrypted private key<div name="popup" class="boxinline textpopup">The private key is encrypted with the password and the seed to prevent theft.</div></span><br>
+<input type="text" id="private" class="boxinline textinput" onchange="JA.Update();"><br>
+<span>Initialization vector<div name="popup" class="boxinline textpopup">This is a seed for encryption.</div></span><br>
+<input type="text" id="iv" class="boxinline textinput" onchange="JA.Update();"><br>
+<span>Password<div name="popup" class="boxinline textpopup">This is used for encryption of the private key.<br>This can be empty but it is not recommended.<br>Only uppercase and lowercase letters, digits and hyphen are accepted.<br>The length should be less than 43 characters.</div></span><br>
+<input type="password" id="password" class="boxinline textinput" onchange="JA.Update();"><br>
+</div>
+</div>
+<div class="boxinline textfloat" style="min-width: 22em; vertical-align: top;">
+<div class="boxoneline texttitle2">User data settings</div>
+<div class="boxoneline">
+<span>Your private key<div name="popup" class="boxinline textpopup">This should be tied to an wallet address that has JPYC <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> tokens.<br>The key should start with 0x and be 64 characters length hexadecimal.<br>If you set a password and save this, you should enter the password every time when the page is reloaded.</div></span><br>
+<input type="text" id="newprivate" value="0x" class="boxinline textinput"><br>
+<form onsubmit="JA.UpdatePrivateKey();return false;">
+<input type="submit" value="Encrypt and save the private key" class="boxinline textbutton1">
+</form>
+</div>
+</div>
+<div class="boxinline textfloat" style="min-width: 22em; vertical-align: top;">
+<div class="boxoneline texttitle2">Contract settings</div>
+<div class="boxoneline">
+<span>Contract address<div name="popup" class="boxinline textpopup">This is the address of the arbitrage contract.<br>Normally you do not have to change this.</div></span><br>
+<input type="text" id="contract" value="0x14d54eadf2e27Dae14EF81D6CC357AfB1415B686" class="boxinline textinput"><br>
+<span>Amount<div name="popup" class="boxinline textpopup">This is how many tokens will be used for a transaction.</div></span><br>
+<input type="text" id="amount" class="boxinline textinput"><br>
+<span>Threshold<div name="popup" class="boxinline textpopup">Transactions will be issued if the profit is more than or equal to this.</div></span><br>
+<input type="text" id="threshold" class="boxinline textinput"><br>
+<form onsubmit="JA.Approve();return false;">
+<input type="submit" value="Approve the token" class="boxinline textbutton1">
+</form>
+</div>
+</div>
+<div class="boxinline textfloat" style="min-width: 22em; vertical-align: top;">
+<div class="boxoneline texttitle2">Back running settings (optional)</div>
+<div class="boxoneline">
+<span>Blocknative API key<div name="popup" class="boxinline textpopup">This is your API key of Mempool Explorer to subscribe pending transactions.<br>You can create an account and get the key for free on Blocknative.</div></span><br>
+<input type="text" id="blocknative" class="boxinline textinput" onchange="JA.Update();"><br>
+<span>Threshold for exchanges<div name="popup" class="boxinline textpopup">Transactions will be issued if another pending transaction is about to swap JPYC <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> tokens more than or equal to this on exchanges (e.g. Uniswap).</div></span><br>
+<input type="text" id="thresholdexchanges" class="boxinline textinput" onchange="JA.Update();"><br>
+<span>Threshold for aggregators<div name="popup" class="boxinline textpopup">Transactions will be issued if another pending transaction is about to swap JPYC <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> tokens more than or equal to this on exchange aggregators (e.g. 1inch).</div></span><br>
+<input type="text" id="thresholdaggregators" class="boxinline textinput" onchange="JA.Update();"><br>
+</div>
+</div>
+<div class="boxoneline textfloat">
+<div class="boxoneline texttitle2">Trading Status</div>
+<div class="boxoneline textoutput"><span><span id="auth"></span><div name="popup" class="boxinline textpopup">This shows whether your wallet address is ready to trade.</div></span></div>
+<div class="boxoneline textoutput"><span><span id="balance"></span><div name="popup" class="boxinline textpopup">This shows how much you have gas tokens and JPYC <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> tokens.<br>Gas tokens should be enough for transactions.<br>JPYC <img name="token" id="0x431d5dff03120afa4bdf332c61a6e1766ef37bdb" class="imageinline"> tokens are required if you set the amount more than the balance of the community.</div></span></div>
+<div class="boxoneline textoutput"><span><span id="quote"></span><div name="popup" class="boxinline textpopup">This shows how much you will earn if your transaction is mined at the moment.</div></span></div>
+</div>
+<div class="boxoneline textfloat">
+<div class="boxoneline texttitle2">Community Status</div>
+<div class="boxoneline textoutput"><span><span id="balancecommunity"></span><div name="popup" class="boxinline textpopup">This shows how much you can use for every transaction without tokens in your wallet.</div></span></div>
+<div class="boxoneline textoutput"><span><span id="reservecommunity"></span><div name="popup" class="boxinline textpopup">This shows how much the community can give users who make profit not so much.<br>How much you will get from it depends on the profit.<br>The reserve increases when users make profit more, and decreases when they make less.</div></span></div>
+</div>
+<div class="boxoneline textfloat">
+<div class="boxoneline texttitle2">Log</div>
+<div id="log" class="boxoneline textoutput"></div>
+</div>
+</div>
+</body>
+</html>
